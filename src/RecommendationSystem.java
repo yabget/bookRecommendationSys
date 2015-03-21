@@ -58,7 +58,8 @@ public class RecommendationSystem {
 
             if(startParsing == false){
                 if(currLine.contains("Title:")){
-                    title = currLine.split("Title:")[1].replaceAll("\\s+", ""); //Remove all white space from title
+                    //Remove all white space from title, lowerCase
+                    title = currLine.split("Title:")[1].replaceAll("\\s+", "").toLowerCase();
                 }
                 return; //Don't start parsing yet
             }
