@@ -8,7 +8,12 @@ import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -162,7 +167,7 @@ public class RecommendationSystem {
     public static class TermFreqReducer extends Reducer<Text, Text, Text, Text> {
 
         public void reduce(Text key, Iterable<Text> value, Context context) throws IOException, InterruptedException {
-            StringBuffer output = new StringBuffer(); //For a more efficient append
+            StringBuilder output = new StringBuilder();
 
             for(Text bookNormalizedFreq : value){
                 output.append(bookNormalizedFreq); // Concats values
@@ -231,7 +236,7 @@ public class RecommendationSystem {
 
             for(String book : books){
                 Map<String, Double> termToNorm = bookToTermNorm.get(book); //All terms and normFreq in book
-                StringBuffer bcvLine = new StringBuffer();
+                StringBuilder bcvLine = new StringBuilder();
 
                 for(String term : termToBookOccurance.keySet()){
                     Double TF = termToNorm.get(term); //The term frequency for term i (in current book)
@@ -244,7 +249,7 @@ public class RecommendationSystem {
                     //Get the inverse document frequency (total numBooks divided by number of books term i appears in
                     double IDF = Math.log((double)numBooks/ termToBookOccurance.get(term)) / Math.log(2);
 
-                    bcvLine.append(TF*IDF + " ");
+                    bcvLine.append(TF * IDF).append(" ");
                 }
 
                 //Write book followed by space separated values
@@ -253,7 +258,52 @@ public class RecommendationSystem {
         }
     }
 
-    public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+    /**
+     *
+     */
+    public static class EuclideanDistanceMapper extends Mapper<Object, Text, Text, Text> {
+
+        public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+            String[] bookBCVs = value.toString().split("\\s"); //Book 0.4 0.3 0.5 0.6 as string
+            String book = bookBCVs[0];
+
+            final double[] bcvLine = new double[bookBCVs.length-1];
+            for(int i=1; i < bookBCVs.length; ++i){
+                bcvLine[i-1] = Double.parseDouble(bookBCVs[i]); //Values converted to doubles
+            }
+
+            File bcvFile = new File("./fourthInput");
+            BufferedReader bufferedReader = new BufferedReader(new FileReader(bcvFile));
+
+            String line;
+            StringBuilder matrixRow = new StringBuilder(); //StringBuilder because no synchronize needed
+
+            while((line = bufferedReader.readLine()) != null){
+                double euclideanD = 0;
+
+                String[] tempBookBCVs = line.split("\\s"); //Separate the different tf.idf values
+
+                if(tempBookBCVs[0].equals(book)){ //Same book should have euclid distance of 0
+                    matrixRow.append(euclideanD).append(" ");
+                    continue;
+                }
+
+                for(int i=1; i < tempBookBCVs.length; ++i){
+                    double tfIDF1 = Double.parseDouble(tempBookBCVs[i]);
+                    double tfIDF2 = bcvLine[i-1];
+
+                    double diff = tfIDF1 - tfIDF2;
+                    double diffSquared = diff * diff;
+                    euclideanD += diffSquared;
+                }
+
+                matrixRow.append(Math.sqrt(euclideanD)).append(" ");
+            }
+            context.write(new Text(book), new Text(matrixRow.toString()));
+        }
+    }
+
+    public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException, URISyntaxException {
         Configuration conf = new Configuration();
 
         Job job = Job.getInstance(conf, "TermFrequency");
@@ -317,7 +367,27 @@ public class RecommendationSystem {
 
         thrJob.waitForCompletion(true);
 
+        // FOURTH JOB
 
+        Job fourthJob = Job.getInstance(conf, "TermFrequency");
+
+        fourthJob.setJarByClass(RecommendationSystem.class);
+
+        fourthJob.setMapperClass(EuclideanDistanceMapper.class);
+        fourthJob.setMapOutputKeyClass(Text.class);
+        fourthJob.setMapOutputValueClass(Text.class);
+
+        //fourthJob.setReducerClass(EuclideanDistanceReducer.class);
+
+        Path fourthJobInputPath = new Path("/recSys/thirdJobOutput/part-r-00000");
+        fourthJob.addCacheFile(new URI("/recSys/thirdJobOutput/part-r-00000#fourthInput"));
+
+        Path fourthJobOutputPath = new Path("/recSys/fourthJobOutput");
+
+        FileInputFormat.setInputPaths(fourthJob, fourthJobInputPath);
+        FileOutputFormat.setOutputPath(fourthJob, fourthJobOutputPath);
+
+        fourthJob.waitForCompletion(true);
     }
 
 }
