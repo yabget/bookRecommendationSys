@@ -6,67 +6,49 @@ import java.util.*;
  */
 public class CLI {
 
-    private final int numSimilarBooksToReturn = 2;
+    private final int numSimilarBooksToReturn = 30;
 
     private final HashMap<String, Map<String, Double>> euclideanMatrix = new HashMap<String, Map<String, Double>>();;
 
+    private Map<String, Double> getMatrixRow(String bookName){
+        Map<String, Double> book = euclideanMatrix.get(bookName);
+
+        if(book == null){
+            book = new HashMap<String, Double>();
+        }
+
+        return book;
+    }
 
     public CLI(String fileName) throws IOException {
         File mapReduceJobOutput = new File(fileName);
         BufferedReader bufferedReader = new BufferedReader(new FileReader(mapReduceJobOutput));
 
         try {
+
             String line;
-            ArrayList<String> lines = new ArrayList<String>();
-            ArrayList<String> bookNames = new ArrayList<String>();
-
             while((line = bufferedReader.readLine()) != null){
-                lines.add(line);
-                bookNames.add(line.split("\\s")[0]);
+                String[] spaceSep = line.split("\\s+");
+                String[] books = spaceSep[0].split("_");
+
+                //Book[0] is first book, book[1] is second book
+                Map<String, Double> book1 = getMatrixRow(books[0]);
+                Map<String, Double> book2 = getMatrixRow(books[1]);
+
+                double similarity = Double.parseDouble(spaceSep[1]);
+
+                book1.put(books[1], similarity);
+                book2.put(books[0], similarity);
+
+                euclideanMatrix.put(books[0], book1);
+                euclideanMatrix.put(books[1], book2);
+
             }
 
-            for(int i=0; i < lines.size(); i++){
-                String[] bookVals = lines.get(i).split("\\s+");
-
-                String book = bookVals[0];
-                //System.out.println(book);
-
-                Map<String, Double> bookToVal = euclideanMatrix.get(book);
-
-                if(bookToVal == null){
-                    bookToVal = new HashMap<String, Double>();
-                }
-
-                int lengthBooks = (bookVals.length-1);
-
-                for(int j=lengthBooks; j > 0 ; j--){
-                    double val = Double.parseDouble(bookVals[j]);
-
-                    int currBookIndex = lengthBooks-j+i;
-                    String currBook = bookNames.get(currBookIndex);
-
-                    bookToVal.put(currBook, val);         //Get the corresponding column book
-
-                    //System.out.println("\t" + currBook + " -> " + val);
-
-                    Map<String, Double> otherBookToVal = euclideanMatrix.get(currBook);
-
-                    if(otherBookToVal == null){
-                        otherBookToVal = new HashMap<String, Double>();
-                    }
-
-                    otherBookToVal.put(book, val);
-                    euclideanMatrix.put(currBook, otherBookToVal);
-                }
-
-                euclideanMatrix.put(book, bookToVal);
+            System.out.println("Indexed " + euclideanMatrix.size() + " books.");
+            for(String name : euclideanMatrix.keySet()){
+                System.out.println("Title: " + name);
             }
-
-            for(String book: euclideanMatrix.keySet()){
-                System.out.println(book);
-                System.out.println("\t" + euclideanMatrix.get(book));
-            }
-
         } catch (IOException e) {
             //e.printStackTrace();
             System.out.println("Could not read line in file.");
@@ -79,44 +61,46 @@ public class CLI {
 
     private void getSimilarBooks(String bookToSearch) {
         if(!euclideanMatrix.containsKey(bookToSearch)){
-            System.out.println("Book is not found.");
+            System.out.println("Book is not found. Check spelling.");
             return;
         }
 
         HashSet<String> similarBooks = new HashSet<String>();
 
-        double leastSimilarVal = -1;
-        String leastSimilarBook = new String();
         Map<String, Double> booksInRow = euclideanMatrix.get(bookToSearch);
 
         for(String book : booksInRow.keySet()){
             if(book.equalsIgnoreCase(bookToSearch)){
                 continue;
             }
+
             if(similarBooks.size() >= numSimilarBooksToReturn){ //If the size of our results to return is reached
 
-                if(booksInRow.get(book) > leastSimilarVal){ //If this book is less similar than the leastSimilar
-                    continue; //Don't add book
-                }
+                similarBooks.add(book); //Add the book
+                double leastSimVal = -1;
 
-                similarBooks.remove(leastSimilarBook); //Remove the least similar book
-                similarBooks.add(book); //Add the new book
-
-                if(booksInRow.get(book) > leastSimilarVal){ //Comparing euclidean distance
-                    leastSimilarVal = booksInRow.get(book);
-                    leastSimilarBook = book;
+                String toRemove = book;
+                for(String similarBook : similarBooks){
+                    double bookVal = booksInRow.get(similarBook);
+                    if(bookVal > leastSimVal){
+                        leastSimVal = bookVal;
+                        toRemove = similarBook;
+                    }
                 }
+                similarBooks.remove(toRemove);
                 continue;
             }
-            if(booksInRow.get(book) > leastSimilarVal){ //Comparing euclidean distance
-                leastSimilarVal = booksInRow.get(book);
-                leastSimilarBook = book;
-            }
+
             similarBooks.add(book);
 
         }
-        for(String book : similarBooks){
-            System.out.println("\t" + book);
+        int count = 1;
+        String[] simBooks = new String[similarBooks.size()];
+        similarBooks.toArray(simBooks);
+        Arrays.sort(simBooks);
+        for(String book : simBooks){
+            System.out.println("\t" + count + " " + book);
+            count++;
         }
 
     }
@@ -125,7 +109,7 @@ public class CLI {
 
 
         try {
-            CLI cli = new CLI("bookMatrix");
+            CLI cli = new CLI("FINAL_600.txt");
 
             Scanner scan = new Scanner(System.in);
 
@@ -143,6 +127,5 @@ public class CLI {
         }
 
     }
-
 
 }
