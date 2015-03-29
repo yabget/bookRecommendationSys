@@ -1,17 +1,15 @@
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.IntWritable;
-import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Partitioner;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.NLineInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.*;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.HashMap;
@@ -146,7 +144,7 @@ public class RecommendationSystem {
                 String word = termBook[0]; //A
                 String book = termBook[1]; //L
 
-                String bookFraction = "|" + book + "_" + ((double)termFreq.get(term)/ maxFreq);
+                String bookFraction = "|" + book + "_" + termFreq.get(term) + "/" + maxFreq;
                 // |L_(10/maxFreq)
 
                 context.write(new Text(word), new Text(bookFraction)); // <A, "|L_(10/maxFreq)">
@@ -201,8 +199,15 @@ public class RecommendationSystem {
 
         //Maps a book to a hashmap of the < term, normalizedFreq > for that book
         //Ex. If A has normalized frequency of 0.4 for book L
-        //  <L, <A, 0.4>>
+        //  <L, <A, 0.4> <B, 0.5>>
         private Map<String, Map<String, Double>> bookToTermNorm = new HashMap<String, Map<String, Double>>();
+
+        public double getDouble(String text){
+            String[] nums = text.split("/");
+            double num1 = Double.parseDouble(nums[0]);
+            double num2 = Double.parseDouble(nums[1]);
+            return num1/num2;
+        }
 
         public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
 
@@ -216,7 +221,7 @@ public class RecommendationSystem {
                 String[] bookNormFreq = wordNormalizedfreqs[i].split("_"); //Seperate book and normalizedFreq
 
                 String book = bookNormFreq[0];
-                double normFreq = Double.parseDouble(bookNormFreq[1]);
+                double normFreq = getDouble(bookNormFreq[1]);
 
                 //Gets the of terms to frequencies for the book
                 Map<String, Double> termToNorm = bookToTermNorm.get(book);
@@ -243,14 +248,20 @@ public class RecommendationSystem {
                     Double TF = termToNorm.get(term); //The term frequency for term i (in current book)
 
                     if(TF == null){ // The book does not contain the term (so frequency is 0)
-                        bcvLine.append("0 ");
+                        //bcvLine.append(term.trim()).append("_0").append(" ");
                         continue;
                     }
 
                     //Get the inverse document frequency (total numBooks divided by number of books term i appears in
                     double IDF = Math.log((double)numBooks/ termToBookOccurance.get(term)) / Math.log(2);
 
-                    bcvLine.append(TF * IDF).append(" ");
+                    double TFIDF = TF * IDF;
+                    if(TFIDF == 0){
+                        //bcvLine.append(term.trim()).append("_0").append(" ");
+                        continue;
+                    }
+
+                    bcvLine.append(term.trim()).append("=").append(TFIDF).append(" ");
                 }
 
                 //Write book followed by space separated values
@@ -259,55 +270,95 @@ public class RecommendationSystem {
         }
     }
 
-    /**
-     *
-     */
-    public static class EuclideanDistanceMapper extends Mapper<Object, Text, Text, Text> {
+    public static class EuclidDMapper extends Mapper<LongWritable, Text, Text, Text> {
 
-        public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
-            String[] bookBCVs = value.toString().split("\\s"); //Book 0.4 0.3 0.5 0.6 as string
-            String book = bookBCVs[0];
+        private RandomAccessFile randomAccessFile;
 
-            final double[] bcvLine = new double[bookBCVs.length-1];
-            for(int i=1; i < bookBCVs.length; ++i){
-                bcvLine[i-1] = Double.parseDouble(bookBCVs[i]); //Values converted to doubles
+        public void getBookBCV(String[] line, HashMap<String, Double> termToTFIDF){
+            for(int i=1; i < line.length; ++i){
+                String[] keyVal = line[i].split("=");
+                termToTFIDF.put(keyVal[0], Double.parseDouble(keyVal[1]));
             }
+        }
 
-            File bcvFile = new File("./fourthInput");
-            BufferedReader bufferedReader = new BufferedReader(new FileReader(bcvFile));
+        public void setup(Context context) throws FileNotFoundException {
+            randomAccessFile = new RandomAccessFile("./fourthInput", "r");
+        }
+
+        public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+            randomAccessFile.seek(key.get());
+
+            String[] bookBCVs = randomAccessFile.readLine().split("\\s+");
+            String currBook = bookBCVs[0];
+
+            HashMap<String, Double> book1 = new HashMap<String, Double>();
+            getBookBCV(bookBCVs, book1);
 
             String line;
-            StringBuilder matrixRow = new StringBuilder(); //StringBuilder because no synchronize needed
+            context.write(new Text(currBook + "_" + currBook), new Text("0 0"));
 
-            while((line = bufferedReader.readLine()) != null){
-                double euclideanD = 0;
+            while((line = randomAccessFile.readLine()) != null){
+                String[] otherBookBCV = line.split("\\s+");
+                String otherBook = otherBookBCV[0];
 
-                String[] tempBookBCVs = line.split("\\s"); //Separate the different tf.idf values
+                HashMap<String, Double> book2 = new HashMap<String, Double>();
+                getBookBCV(otherBookBCV, book2);
 
-                if(tempBookBCVs[0].equals(book)){ //Same book should have euclid distance of 0
-                    matrixRow.append(euclideanD).append(" ");
-                    continue;
+                Text outKey = new Text(currBook + "_" + otherBook);
+
+                for(String b1Val : book1.keySet()){
+                    StringBuilder stringBuilder = new StringBuilder();
+                    if(book2.containsKey(b1Val)){
+                        stringBuilder.append(book1.get(b1Val)).append(" ").append(book2.get(b1Val));
+                    }
+                    else{
+                        stringBuilder.append(book1.get(b1Val)).append(" ").append(0);
+                    }
+
+                    context.write(outKey, new Text(stringBuilder.toString()));
                 }
-
-                for(int i=1; i < tempBookBCVs.length; ++i){
-                    double tfIDF1 = Double.parseDouble(tempBookBCVs[i]);
-                    double tfIDF2 = bcvLine[i-1];
-
-                    double diff = tfIDF1 - tfIDF2;
-                    double diffSquared = diff * diff;
-                    euclideanD += diffSquared;
-                }
-
-                matrixRow.append(Math.sqrt(euclideanD)).append(" ");
             }
-            context.write(new Text(book), new Text(matrixRow.toString()));
+        }
+    }
+
+    public static class EuclidDPartioner extends Partitioner<Text, Text> {
+
+        @Override
+        public int getPartition(Text key, Text value, int numReducers) {
+            return key.toString().split("_")[1].hashCode() % numReducers;
+        }
+    }
+
+    public static class EuclidDReducer extends Reducer<Text ,Text, Text, Text>{
+
+        private double euclidDist(String[] nums){
+            double num1 = Double.parseDouble(nums[0]);
+            double num2 = Double.parseDouble(nums[1]);
+
+            double diff = num1 - num2;
+
+            return diff * diff;
+        }
+
+        public void reduce(Text key, Iterable<Text> value, Context context) throws IOException, InterruptedException {
+
+            double sum = 0;
+            for(Text vals : value){
+                sum += euclidDist(vals.toString().split("\\s+"));
+            }
+            double euclidD = Math.sqrt(sum);
+
+            context.write(key, new Text(euclidD + ""));
+
         }
     }
 
     public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException, URISyntaxException {
         Configuration conf = new Configuration();
 
-        Job job = Job.getInstance(conf, "TermFrequency");
+        conf.setLong("mapred.task.timeout", 1800000);
+
+        Job job = Job.getInstance(conf, "Freq Job");
 
         job.setJarByClass(RecommendationSystem.class);
 
@@ -329,7 +380,7 @@ public class RecommendationSystem {
 
         // SECOND JOB
 
-        Job secJob = Job.getInstance(conf, "TermFrequency");
+        Job secJob = Job.getInstance(conf, "TermFreq Job");
 
         secJob.setJarByClass(RecommendationSystem.class);
 
@@ -349,10 +400,9 @@ public class RecommendationSystem {
 
         secJob.waitForCompletion(true);
 
-
         // THIRD JOB
 
-        Job thrJob = Job.getInstance(conf, "TermFrequency");
+        Job thrJob = Job.getInstance(conf, "BCV Job");
 
         thrJob.setJarByClass(RecommendationSystem.class);
 
@@ -370,15 +420,26 @@ public class RecommendationSystem {
 
         // FOURTH JOB
 
-        Job fourthJob = Job.getInstance(conf, "TermFrequency");
+        conf.setInt("mapred.reduce.tasks", 40);
+        Job fourthJob = Job.getInstance(conf, "EuclidD Job");
 
         fourthJob.setJarByClass(RecommendationSystem.class);
 
-        fourthJob.setMapperClass(EuclideanDistanceMapper.class);
+        fourthJob.setInputFormatClass(NLineInputFormat.class);
+
+        NLineInputFormat.addInputPath(fourthJob, new Path("/recSys/thirdJobOutput/part-r-00000"));
+
+        // Each line of the file gets sent to a mapper
+        fourthJob.getConfiguration().setInt("mapreduce.input.lineinputformat.linespermap", 1);
+
+        System.out.println("SETUP NLINEINPUT FORMAT!");
+
+        fourthJob.setMapperClass(EuclidDMapper.class);
+
         fourthJob.setMapOutputKeyClass(Text.class);
         fourthJob.setMapOutputValueClass(Text.class);
 
-        //fourthJob.setReducerClass(EuclideanDistanceReducer.class);
+        fourthJob.setReducerClass(EuclidDReducer.class);
 
         Path fourthJobInputPath = new Path("/recSys/thirdJobOutput/part-r-00000");
         fourthJob.addCacheFile(new URI("/recSys/thirdJobOutput/part-r-00000#fourthInput"));
@@ -389,6 +450,132 @@ public class RecommendationSystem {
         FileOutputFormat.setOutputPath(fourthJob, fourthJobOutputPath);
 
         fourthJob.waitForCompletion(true);
+
     }
+
+    /*
+    public static class EuclideanDistanceMapper extends Mapper<Object, Text, Text, Text> {
+
+        HashMap<String, String> comparedBooks = new HashMap<String, String>();
+
+        public void getBookBCV(String[] line, HashMap<String, Double> tempBCV){
+            for(int i=1; i < line.length; ++i){
+                String[] keyVal = line[i].split("=");
+                tempBCV.put(keyVal[0], Double.parseDouble(keyVal[1]));
+            }
+        }
+
+        public double euclideanDistance(double[] book1, double[] book2){
+            if(book1.length != book2.length){
+                System.out.println("NOT SAME LENGTH FOR EUCLIDEAN DISTANCE!");
+                System.exit(1);
+            }
+            double euclideanD = 0;
+            for(int i=0; i < book1.length; ++i){
+                double diff = book1[i] - book2[i];
+                double diffSquared = diff * diff;
+                euclideanD += diffSquared;
+            }
+            return Math.sqrt(euclideanD);
+        }
+
+        public double euclidDist(HashMap<String, Double> book1, HashMap<String, Double> book2){
+            double euclidD= 0;
+            for(String b1Val : book1.keySet()){
+                if(book2.containsKey(b1Val)){
+                    double diff = book1.get(b1Val) - book2.get(b1Val);
+                    euclidD += (diff * diff);
+                }
+            }
+            return Math.sqrt(euclidD);
+        }
+
+        public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+            LineIterator lineIterator = FileUtils.lineIterator(new File("./fourthInput"));
+
+            String[] spaceSplit = value.toString().split("\\s+");
+            String currBook = spaceSplit[0];
+
+            HashMap<String, Double> currentBook = new HashMap<String, Double>();
+            getBookBCV(spaceSplit, currentBook);
+
+            StringBuilder stringBuilder = new StringBuilder();
+            try{
+                while (lineIterator.hasNext()){
+                    String[] line = lineIterator.nextLine().split("\\s+");
+                    String book = line[0];
+
+                    if(comparedBooks.containsKey(book)){
+                        continue;
+                    }
+
+                    HashMap<String, Double> newBook = new HashMap<String, Double>();
+                    getBookBCV(line, newBook);
+
+                    double euclidD = euclidDist(currentBook, newBook);
+                    stringBuilder.append(euclidD).append(" ");
+                }
+            }
+            finally {
+                LineIterator.closeQuietly(lineIterator);
+            }
+            context.write(new Text(currBook), new Text(stringBuilder.toString()));
+            comparedBooks.put(currBook, null);
+        }
+    }
+    */
+
+    /*
+    public static class EuclidDMapper extends Mapper<Object, Text, Text, DoubleArrayWritable> {
+
+        public void getBookBCV(String[] line, HashMap<String, Double> termToTFIDF){
+            for(int i=1; i < line.length; ++i){
+                String[] keyVal = line[i].split("=");
+                termToTFIDF.put(keyVal[0], Double.parseDouble(keyVal[1]));
+            }
+        }
+
+        public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+
+            String[] bookBCVs = value.toString().split("\\s+");
+            String currBook = bookBCVs[0];
+
+            HashMap<String, Double> book1 = new HashMap<String, Double>();
+            getBookBCV(bookBCVs, book1);
+
+            boolean startWriting = false;
+
+            BufferedReader bufferedReader = new BufferedReader(new FileReader(new File("./fourthInput")));
+
+            String line;
+            DoubleWritable[] outValue = new DoubleWritable[2];
+
+            while((line = bufferedReader.readLine()) != null){
+                String[] otherBookBCV = line.split("\\s+");
+                String otherBook = otherBookBCV[0];
+                if(currBook.equals(otherBook)){
+                    startWriting = true;
+                }
+                if(startWriting){
+                    HashMap<String, Double> book2 = new HashMap<String, Double>();
+                    getBookBCV(otherBookBCV, book2);
+
+                    Text outKey = new Text(currBook + "_" + otherBook);
+
+                    for(String b1Val : book1.keySet()){
+                        if(book2.containsKey(b1Val)){
+                            outValue[1] = new DoubleWritable(book2.get(b1Val));
+                        }
+                        else{
+                            outValue[1] = new DoubleWritable(0);
+                        }
+                        outValue[0] = new DoubleWritable(book1.get(b1Val));
+                        context.write(outKey, new DoubleArrayWritable(outValue));
+                    }
+                }
+            }
+        }
+    }
+    */
 
 }

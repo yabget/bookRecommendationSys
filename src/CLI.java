@@ -10,7 +10,8 @@ public class CLI {
 
     private final HashMap<String, Map<String, Double>> euclideanMatrix = new HashMap<String, Map<String, Double>>();;
 
-    public CLI(String fileName) throws FileNotFoundException {
+
+    public CLI(String fileName) throws IOException {
         File mapReduceJobOutput = new File(fileName);
         BufferedReader bufferedReader = new BufferedReader(new FileReader(mapReduceJobOutput));
 
@@ -18,6 +19,7 @@ public class CLI {
             String line;
             ArrayList<String> lines = new ArrayList<String>();
             ArrayList<String> bookNames = new ArrayList<String>();
+
             while((line = bufferedReader.readLine()) != null){
                 lines.add(line);
                 bookNames.add(line.split("\\s")[0]);
@@ -27,29 +29,51 @@ public class CLI {
                 String[] bookVals = lines.get(i).split("\\s+");
 
                 String book = bookVals[0];
+                //System.out.println(book);
 
                 Map<String, Double> bookToVal = euclideanMatrix.get(book);
+
                 if(bookToVal == null){
                     bookToVal = new HashMap<String, Double>();
                 }
 
-                for(int j=1; j < bookVals.length; j++){
+                int lengthBooks = (bookVals.length-1);
+
+                for(int j=lengthBooks; j > 0 ; j--){
                     double val = Double.parseDouble(bookVals[j]);
-                    bookToVal.put(bookNames.get(j-1), val);         //Get the corresponding column book
+
+                    int currBookIndex = lengthBooks-j+i;
+                    String currBook = bookNames.get(currBookIndex);
+
+                    bookToVal.put(currBook, val);         //Get the corresponding column book
+
+                    //System.out.println("\t" + currBook + " -> " + val);
+
+                    Map<String, Double> otherBookToVal = euclideanMatrix.get(currBook);
+
+                    if(otherBookToVal == null){
+                        otherBookToVal = new HashMap<String, Double>();
+                    }
+
+                    otherBookToVal.put(book, val);
+                    euclideanMatrix.put(currBook, otherBookToVal);
                 }
 
                 euclideanMatrix.put(book, bookToVal);
             }
 
-            /*for(String book: euclideanMatrix.keySet()){
+            for(String book: euclideanMatrix.keySet()){
                 System.out.println(book);
                 System.out.println("\t" + euclideanMatrix.get(book));
-            }*/
+            }
 
         } catch (IOException e) {
             //e.printStackTrace();
             System.out.println("Could not read line in file.");
             System.exit(1);
+        }
+        finally {
+            bufferedReader.close();
         }
     }
 
@@ -99,6 +123,7 @@ public class CLI {
 
     public static void main(String[] args){
 
+
         try {
             CLI cli = new CLI("bookMatrix");
 
@@ -113,6 +138,8 @@ public class CLI {
         } catch (FileNotFoundException e) {
             System.out.println("Input file is not found! " + args[0]);
             System.exit(1);
+        } catch (IOException e) {
+            e.printStackTrace();
         }
 
     }
